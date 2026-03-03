@@ -131,7 +131,7 @@ namespace UnLua
 
         static void* DefaultLuaAllocator(void* ud, void* ptr, size_t osize, size_t nsize);
 
-        virtual lua_Alloc GetLuaAllocator() const;
+        lua_Alloc GetLuaAllocator() const;
 
         bool LoadString(lua_State* InL, const TArray<uint8>& Chunk, const FString& ChunkName = "chunk")
         {

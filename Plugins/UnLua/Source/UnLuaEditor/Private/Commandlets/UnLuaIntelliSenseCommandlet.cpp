@@ -18,6 +18,27 @@
 #include "Misc/FileHelper.h"
 #include "UnLuaIntelliSenseGenerator.h"
 
+namespace
+{
+/** 将静态导出类/枚举生成内容挂到 UE 命名空间，与运行时 UE.FImGui 等一致。 */
+void WrapClassContentUnderUE(FString& Content, const FString& ClassName)
+{
+    Content = FString(TEXT("if not _G.UE then _G.UE = {} end\r\n")) + Content;
+    Content.ReplaceInline(TEXT("local M = {}"), *FString::Printf(TEXT("UE.%s = {}"), *ClassName));
+    Content.ReplaceInline(*FString::Printf(TEXT("function %s."), *ClassName), *FString::Printf(TEXT("function UE.%s."), *ClassName));
+    Content.ReplaceInline(TEXT("\r\n\r\nreturn M\r\n"), TEXT(""));
+    Content.ReplaceInline(TEXT("\r\nreturn M\r\n"), TEXT(""));
+}
+
+void WrapEnumContentUnderUE(FString& Content, const FString& EnumName)
+{
+    Content = FString(TEXT("if not _G.UE then _G.UE = {} end\r\n")) + Content;
+    Content.ReplaceInline(TEXT("local M = {}"), *FString::Printf(TEXT("UE.%s = {}"), *EnumName));
+    Content.ReplaceInline(TEXT("\r\n\r\nreturn M\r\n"), TEXT(""));
+    Content.ReplaceInline(TEXT("\r\nreturn M\r\n"), TEXT(""));
+}
+} // namespace
+
 UUnLuaIntelliSenseCommandlet::UUnLuaIntelliSenseCommandlet(const FObjectInitializer& ObjectInitializer)
     : Super(ObjectInitializer)
 {
@@ -67,6 +88,7 @@ int32 UUnLuaIntelliSenseCommandlet::Main(const FString &Params)
             continue;
 
         Pair.Value->GenerateIntelliSense(GeneratedFileContent);
+        WrapClassContentUnderUE(GeneratedFileContent, Pair.Key);
         SaveFile(ModuleName, Pair.Key, GeneratedFileContent);
     }
 
@@ -76,6 +98,7 @@ int32 UUnLuaIntelliSenseCommandlet::Main(const FString &Params)
             continue;
 
         Pair.Value->GenerateIntelliSense(GeneratedFileContent);
+        WrapClassContentUnderUE(GeneratedFileContent, Pair.Key);
         SaveFile(ModuleName, Pair.Key, GeneratedFileContent);
     }
 
@@ -85,6 +108,7 @@ int32 UUnLuaIntelliSenseCommandlet::Main(const FString &Params)
             continue;
 
         Enum->GenerateIntelliSense(GeneratedFileContent);
+        WrapEnumContentUnderUE(GeneratedFileContent, Enum->GetName());
         SaveFile(ModuleName, Enum->GetName(), GeneratedFileContent);
     }
 

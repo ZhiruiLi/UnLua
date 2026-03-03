@@ -1,4 +1,4 @@
-﻿// Tencent is pleased to support the open source community by making UnLua available.
+// Tencent is pleased to support the open source community by making UnLua available.
 // 
 // Copyright (C) 2019 Tencent. All rights reserved.
 //
@@ -46,7 +46,24 @@ namespace UnLua
 
     void ExportFunction(IExportedFunction* Function)
     {
-        GetExported()->Functions.Add(Function);
+        TArray<IExportedFunction*>& Functions = GetExported()->Functions;
+#if WITH_EDITOR
+        // Hot Reload 会重新执行静态对象的构造函数，同一函数会再次调用 ExportFunction；
+        // 按名称去重，避免 IntelliSense 中同一全局函数被输出多次。
+        if (Function)
+        {
+            const FString Name = Function->GetName();
+            for (int32 i = Functions.Num() - 1; i >= 0; --i)
+            {
+                if (Functions[i] && Functions[i]->GetName() == Name)
+                {
+                    Functions.RemoveAt(i);
+                    break;
+                }
+            }
+        }
+#endif
+        Functions.Add(Function);
     }
 
     void AddType(FString Name, TSharedPtr<ITypeInterface> TypeInterface)

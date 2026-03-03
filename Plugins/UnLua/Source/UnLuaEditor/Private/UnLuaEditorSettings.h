@@ -46,6 +46,10 @@ public:
     UPROPERTY(config, EditAnywhere, Category = "Coding", meta = (defaultValue = 0))
     EHotReloadMode HotReloadMode;
 
+    /** Paths to export lua def files. */
+    UPROPERTY(config, EditAnywhere, Category = "Coding", meta = (defaultValue = 0))
+    TArray<FString> ExportPaths;
+
     /** Whether or not generate intellisense files for lua. */
     UPROPERTY(config, EditAnywhere, Category = "Coding")
     bool bGenerateIntelliSense = true;

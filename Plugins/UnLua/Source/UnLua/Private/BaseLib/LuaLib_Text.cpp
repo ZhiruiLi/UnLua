@@ -76,7 +76,7 @@ namespace UnLua
     END_EXPORT_ENUM(ETextIdenticalModeFlags)
 
     BEGIN_EXPORT_CLASS(FText)
-        ADD_STATIC_FUNCTION(FromStringTable)
+        // ADD_STATIC_FUNCTION(FromStringTable)
         ADD_STATIC_FUNCTION_EX("FromString", FText, FromString, const FString&)
         ADD_FUNCTION(ToString)
         ADD_FUNCTION(IsNumeric)

@@ -20,8 +20,10 @@
 #include "AssetRegistryModule.h"
 #endif
 #include "CoreUObject.h"
+#include "UObject/SoftObjectPath.h"
 #include "UnLua.h"
 #include "UnLuaEditorSettings.h"
+#include "Binding.h"
 #include "UnLuaIntelliSense.h"
 #include "WidgetBlueprint.h"
 #include "Blueprint/WidgetTree.h"
@@ -31,6 +33,34 @@
 #define LOCTEXT_NAMESPACE "UnLuaIntelliSenseGenerator"
 
 TSharedPtr<FUnLuaIntelliSenseGenerator> FUnLuaIntelliSenseGenerator::Singleton;
+
+/** 收集静态导出类/枚举的类型名（与 ExportStaticallyExportedClassesAndEnums 的名单一致），用于写入 UE.lua。ExcludedTypeNames 中已有的类型不加入，避免与原生导出重复。 */
+static void CollectStaticallyExportedTypeNames(TArray<FString>& OutNames, const TSet<FString>& ExcludedTypeNames)
+{
+#if WITH_EDITOR
+	static const TArray<FString> ClassBlackList = {
+		TEXT("int8"), TEXT("int16"), TEXT("int32"), TEXT("int64"),
+		TEXT("uint8"), TEXT("uint16"), TEXT("uint32"), TEXT("uint64"),
+		TEXT("float"), TEXT("double"), TEXT("bool"), TEXT("FName"), TEXT("FString"),
+		TEXT("TArray"), TEXT("TMap"), TEXT("TSet"),  // 已由默认反射导出，不再在 StaticallyExports 中重复
+	};
+	for (const auto& Pair : UnLua::GetExportedReflectedClasses())
+	{
+		if (!ClassBlackList.Contains(Pair.Key) && !ExcludedTypeNames.Contains(Pair.Key))
+			OutNames.Add(Pair.Key);
+	}
+	for (const auto& Pair : UnLua::GetExportedNonReflectedClasses())
+	{
+		if (!ClassBlackList.Contains(Pair.Key) && !ExcludedTypeNames.Contains(Pair.Key))
+			OutNames.Add(Pair.Key);
+	}
+	for (UnLua::IExportedEnum* Enum : UnLua::GetExportedEnums())
+	{
+		if (!ExcludedTypeNames.Contains(Enum->GetName()))
+			OutNames.Add(Enum->GetName());
+	}
+#endif
+}
 
 TSharedRef<FUnLuaIntelliSenseGenerator> FUnLuaIntelliSenseGenerator::Get()
 {
@@ -90,18 +120,31 @@ void FUnLuaIntelliSenseGenerator::UpdateAll()
         SlowTask.EnterProgressFrame();
     }
 
+    // 已被默认/反射导出的类型不再写入 Script/ModuleName/ 下的单文件，仅保留在 UE.lua 中的声明
+    static const TSet<FString> NativeExportSkipList = { TEXT("UClass") };
     for (const auto Type : NativeTypes)
     {
         if (SlowTask.ShouldCancel())
             break;
-
+        if (NativeExportSkipList.Contains(UnLua::IntelliSense::GetTypeName(Type)))
+        {
+            SlowTask.EnterProgressFrame();
+            continue;
+        }
         Export(Type);
         SlowTask.EnterProgressFrame();
     }
 
     if (SlowTask.ShouldCancel())
         return;
-    ExportUE(NativeTypes);
+    TSet<FString> NativeTypeNames;
+    for (const UField* Type : NativeTypes)
+        NativeTypeNames.Add(UnLua::IntelliSense::GetTypeName(Type));
+    TArray<FString> StaticTypeNames;
+    CollectStaticallyExportedTypeNames(StaticTypeNames, NativeTypeNames);
+    ExportUE(NativeTypes, StaticTypeNames);
+    ExportStaticallyExportedClassesAndEnums(NativeTypeNames);
+    ExportGlobalFunctions();
     ExportUnLua();
     SlowTask.EnterProgressFrame();
 }
@@ -112,8 +155,9 @@ bool FUnLuaIntelliSenseGenerator::IsBlueprint(const FAssetData& AssetData)
     const FName AssetClass = AssetData.AssetClass;
     return AssetClass == UBlueprint::StaticClass()->GetFName() || AssetClass == UWidgetBlueprint::StaticClass()->GetFName();
 #else
-    const auto AssetClassPath = AssetData.AssetClassPath.ToString();
-    return AssetClassPath == UBlueprint::StaticClass()->GetName() || AssetClassPath == UWidgetBlueprint::StaticClass()->GetName();
+    // UE5.1+ 使用 FTopLevelAssetPath 比较，GetName() 仅短名会与 AssetClassPath.ToString() 不一致
+    return AssetData.AssetClassPath == UBlueprint::StaticClass()->GetClassPathName()
+        || AssetData.AssetClassPath == UWidgetBlueprint::StaticClass()->GetClassPathName();
 #endif
 }
 
@@ -125,6 +169,22 @@ bool FUnLuaIntelliSenseGenerator::ShouldExport(const FAssetData& AssetData, bool
 
     if (!IsBlueprint(AssetData))
         return false;
+
+    // 先用路径过滤，避免对大量资源执行 FastGetAsset(true) 导致全量加载、导出极慢
+    const FString Path = AssetData.GetObjectPathString();
+    bool bPathMatch = false;
+    for (const FString& ExportPath : Settings.ExportPaths)
+    {
+        if (Path.StartsWith(ExportPath))
+        {
+            bPathMatch = true;
+            break;
+        }
+    }
+    if (!bPathMatch)
+    {
+        return false;
+    }
 
     const auto Asset = AssetData.FastGetAsset(bLoad);
     if (!Asset)
@@ -166,10 +226,99 @@ void FUnLuaIntelliSenseGenerator::Export(const UField* Field)
     SaveFile(ModuleName, FileName, Content);
 }
 
-void FUnLuaIntelliSenseGenerator::ExportUE(const TArray<const UField*> Types)
+void FUnLuaIntelliSenseGenerator::ExportUE(const TArray<const UField*>& Types)
 {
-    const FString Content = UnLua::IntelliSense::GetUE(Types);
+    ExportUE(Types, TArray<FString>());
+}
+
+void FUnLuaIntelliSenseGenerator::ExportUE(const TArray<const UField*>& Types, const TArray<FString>& AdditionalTypeNames)
+{
+    FString Content = UnLua::IntelliSense::GetUE(Types);
+    if (AdditionalTypeNames.Num() > 0)
+    {
+        // GetUE 以 "}\r\n" 结尾，在闭合括号前插入静态类型的 ---@type 与 = nil
+        if (Content.EndsWith(TEXT("}\r\n")))
+        {
+            Content.LeftChopInline(3);
+            for (const FString& Name : AdditionalTypeNames)
+                Content += FString::Printf(TEXT("\r\n    ---@type %s\r\n    %s = nil,\r\n"), *Name, *Name);
+            Content += TEXT("}\r\n");
+        }
+    }
     SaveFile("", "UE", Content);
+}
+
+/** 将静态导出生成的 “local M = {}; return M” 改为 “local TypeName = {}; return TypeName”，与原生 UObject.lua 一致，便于 IDE 解析定义位置。 */
+static void WrapStaticallyExportedContentAsLocal(FString& Content, const FString& TypeName)
+{
+    Content.ReplaceInline(TEXT("local M = {}"), *FString::Printf(TEXT("local %s = {}"), *TypeName));
+    Content.ReplaceInline(TEXT("\r\n\r\nreturn M\r\n"), *FString::Printf(TEXT("\r\n\r\nreturn %s\r\n"), *TypeName));
+    Content.ReplaceInline(TEXT("\r\nreturn M\r\n"), *FString::Printf(TEXT("\r\nreturn %s\r\n"), *TypeName));
+}
+
+void FUnLuaIntelliSenseGenerator::ExportStaticallyExportedClassesAndEnums(const TSet<FString>& ExcludedTypeNames)
+{
+#if WITH_EDITOR
+    static const TArray<FString> ClassBlackList = {
+        TEXT("int8"), TEXT("int16"), TEXT("int32"), TEXT("int64"),
+        TEXT("uint8"), TEXT("uint16"), TEXT("uint32"), TEXT("uint64"),
+        TEXT("float"), TEXT("double"), TEXT("bool"), TEXT("FName"), TEXT("FString"),
+        TEXT("TArray"), TEXT("TMap"), TEXT("TSet"),  // 已由默认反射导出，不再在 StaticallyExports 中重复
+    };
+    const FString ModuleName = TEXT("StaticallyExports");
+
+    const TMap<FString, UnLua::IExportedClass*>& Reflected = UnLua::GetExportedReflectedClasses();
+    for (const auto& Pair : Reflected)
+    {
+        if (ClassBlackList.Contains(Pair.Key) || ExcludedTypeNames.Contains(Pair.Key))
+            continue;
+        FString Content;
+        Pair.Value->GenerateIntelliSense(Content);
+        WrapStaticallyExportedContentAsLocal(Content, Pair.Key);
+        SaveFile(ModuleName, Pair.Key, Content);
+    }
+
+    const TMap<FString, UnLua::IExportedClass*>& NonReflected = UnLua::GetExportedNonReflectedClasses();
+    for (const auto& Pair : NonReflected)
+    {
+        if (ClassBlackList.Contains(Pair.Key) || ExcludedTypeNames.Contains(Pair.Key))
+            continue;
+        FString Content;
+        Pair.Value->GenerateIntelliSense(Content);
+        WrapStaticallyExportedContentAsLocal(Content, Pair.Key);
+        SaveFile(ModuleName, Pair.Key, Content);
+    }
+
+    const TArray<UnLua::IExportedEnum*>& Enums = UnLua::GetExportedEnums();
+    for (UnLua::IExportedEnum* Enum : Enums)
+    {
+        if (ExcludedTypeNames.Contains(Enum->GetName()))
+            continue;
+        FString Content;
+        Enum->GenerateIntelliSense(Content);
+        WrapStaticallyExportedContentAsLocal(Content, Enum->GetName());
+        SaveFile(ModuleName, Enum->GetName(), Content);
+    }
+#endif
+}
+
+void FUnLuaIntelliSenseGenerator::ExportGlobalFunctions()
+{
+#if WITH_EDITOR
+    static const TArray<FString> FuncBlackList = { TEXT("OnModuleHotfixed") };
+    const TArray<UnLua::IExportedFunction*>& ExportedFunctions = UnLua::GetExportedFunctions();
+    FString GeneratedFileContent;
+    for (UnLua::IExportedFunction* Function : ExportedFunctions)
+    {
+        if (FuncBlackList.Contains(Function->GetName()))
+            continue;
+        Function->GenerateIntelliSense(GeneratedFileContent);
+    }
+    if (!GeneratedFileContent.IsEmpty())
+    {
+        SaveFile(TEXT("StaticallyExports"), TEXT("GlobalFunctions"), GeneratedFileContent);
+    }
+#endif
 }
 
 void FUnLuaIntelliSenseGenerator::ExportUnLua()
@@ -190,6 +339,11 @@ void FUnLuaIntelliSenseGenerator::CollectTypes(TArray<const UField*>& Types)
     for (TObjectIterator<UClass> It; It; ++It)
     {
         const UClass* Class = *It;
+        // 不收集蓝图生成的类，蓝图 IntelliSense 仅由按资源路径导出的分支（OnAssetUpdated）负责
+        if (Class->ClassGeneratedBy && Class->ClassGeneratedBy->IsA<UBlueprint>())
+        {
+            continue;
+        }
         const FString ClassName = Class->GetName();
         // ReSharper disable StringLiteralTypo
         if (ClassName.StartsWith("SKEL_")
@@ -197,6 +351,7 @@ void FUnLuaIntelliSenseGenerator::CollectTypes(TArray<const UField*>& Types)
             || ClassName.StartsWith("REINST_")
             || ClassName.StartsWith("TRASHCLASS_")
             || ClassName.StartsWith("HOTRELOADED_")
+            || ClassName.Contains(TEXT("__PythonCallable"))  // 编辑器/自动化内部类型，不参与 Lua IntelliSense
         )
         {
             // skip nonsense types
@@ -209,12 +364,16 @@ void FUnLuaIntelliSenseGenerator::CollectTypes(TArray<const UField*>& Types)
     for (TObjectIterator<UScriptStruct> It; It; ++It)
     {
         const UScriptStruct* ScriptStruct = *It;
+        if (ScriptStruct->GetName().Contains(TEXT("__PythonCallable")))
+            continue;
         Types.Add(ScriptStruct);
     }
 
     for (TObjectIterator<UEnum> It; It; ++It)
     {
         const UEnum* Enum = *It;
+        if (Enum->GetName().Contains(TEXT("__PythonCallable")))
+            continue;
         Types.Add(Enum);
     }
 }
@@ -283,7 +442,7 @@ void FUnLuaIntelliSenseGenerator::OnAssetUpdated(const FAssetData& AssetData)
     if (!ShouldExport(AssetData, true))
         return;
 
-    UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetData.ObjectPath.ToString());
+    UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetData.GetSoftObjectPath().ToString());
     if (!Blueprint)
         return;
 

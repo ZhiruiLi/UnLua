@@ -1,4 +1,4 @@
-﻿// Tencent is pleased to support the open source community by making UnLua available.
+// Tencent is pleased to support the open source community by making UnLua available.
 // 
 // Copyright (C) 2019 Tencent. All rights reserved.
 //
@@ -370,6 +370,10 @@ namespace UnLua
             if (CastField<FObjectProperty>(Property))
             {
                 const UClass* Class = ((FObjectProperty*)Property)->PropertyClass;
+            	if (!Class)
+            	{
+            		return "Unknown";
+            	}
                 if (Cast<UBlueprintGeneratedClass>(Class))
                 {
                     return FString::Printf(TEXT("%s"), *Class->GetName());
@@ -380,19 +384,31 @@ namespace UnLua
             if (CastField<FWeakObjectProperty>(Property))
             {
                 const UClass* Class = ((FWeakObjectProperty*)Property)->PropertyClass;
-                return FString::Printf(TEXT("TWeakObjectPtr<%s%s>"), Class->GetPrefixCPP(), *Class->GetName());
+            	if (!Class)
+            	{
+            		return "Unknown";
+            	}
+            	return FString::Printf(TEXT("TWeakObjectPtr<%s%s>"), Class->GetPrefixCPP(), *Class->GetName());
             }
 
             if (CastField<FLazyObjectProperty>(Property))
             {
                 const UClass* Class = ((FLazyObjectProperty*)Property)->PropertyClass;
-                return FString::Printf(TEXT("TLazyObjectPtr<%s%s>"), Class->GetPrefixCPP(), *Class->GetName());
+            	if (!Class)
+            	{
+            		return "Unknown";
+            	}
+            	return FString::Printf(TEXT("TLazyObjectPtr<%s%s>"), Class->GetPrefixCPP(), *Class->GetName());
             }
 
             if (CastField<FInterfaceProperty>(Property))
             {
                 const UClass* Class = ((FInterfaceProperty*)Property)->InterfaceClass;
-                return FString::Printf(TEXT("TScriptInterface<%s%s>"), Class->GetPrefixCPP(), *Class->GetName());
+            	if (!Class)
+            	{
+            		return "Unknown";
+            	}
+            	return FString::Printf(TEXT("TScriptInterface<%s%s>"), Class->GetPrefixCPP(), *Class->GetName());
             }
 
             if (CastField<FNameProperty>(Property))
@@ -402,7 +418,11 @@ namespace UnLua
                 return "string";
 
             if (CastField<FTextProperty>(Property))
+#if UNLUA_ENABLE_FTEXT
+                return "FText";
+#else
                 return "string";
+#endif
 
             if (CastField<FArrayProperty>(Property))
             {

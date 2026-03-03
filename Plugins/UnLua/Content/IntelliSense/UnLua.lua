@@ -307,7 +307,7 @@ function MulticastDelegate:Clear()
 end
 
 ---Call all callbacks bound to the delegate
-function MulticastDelegate:Broadcast()
+function MulticastDelegate:Broadcast(...)
 end
 
 ---Detect if any callback bound to this delegate

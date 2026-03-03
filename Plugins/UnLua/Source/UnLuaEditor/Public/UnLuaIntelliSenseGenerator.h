@@ -1,4 +1,4 @@
-﻿// Tencent is pleased to support the open source community by making UnLua available.
+// Tencent is pleased to support the open source community by making UnLua available.
 // 
 // Copyright (C) 2019 Tencent. All rights reserved.
 //
@@ -41,11 +41,21 @@ private:
 
     static bool ShouldExport(const FAssetData& AssetData, bool bLoad = false);
 
+    /** 仅根据 Blueprint 对象与设置判断是否导出（不依赖 FAssetData，用于按类型导出分支）。 */
+    static bool ShouldExportBlueprint(const UBlueprint* Blueprint);
+
     void Export(const UBlueprint* Blueprint);
 
     void Export(const UField* Field);
 
-    void ExportUE(const TArray<const UField*> Types);
+    void ExportUE(const TArray<const UField*>& Types);
+    /** 生成 UE.lua 并追加 AdditionalTypeNames 的 ---@type 与 = nil 条目（用于静态导出类/枚举）。 */
+    void ExportUE(const TArray<const UField*>& Types, const TArray<FString>& AdditionalTypeNames);
+
+    /** 静态导出的类与枚举（如 LuaCogImGui 的 FImGui、ImVec2）写入 StaticallyExports 目录。ExcludedTypeNames 中已有的类型（如已在原生路径导出的 FVector）不再重复导出。 */
+    void ExportStaticallyExportedClassesAndEnums(const TSet<FString>& ExcludedTypeNames);
+
+    void ExportGlobalFunctions();
 
     void ExportUnLua();
 

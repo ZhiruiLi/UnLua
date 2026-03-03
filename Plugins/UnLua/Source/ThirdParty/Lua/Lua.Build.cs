@@ -31,8 +31,19 @@ public class Lua : ModuleRules
     public Lua(ReadOnlyTargetRules Target) : base(Target)
     {
         Type = ModuleType.External;
+#if UE_5_6_OR_LATER
+        CppCompileWarningSettings.UndefinedIdentifierWarningLevel = WarningLevel.Off;
+#elif UE_5_5_OR_LATER
+		UndefinedIdentifierWarningLevel = WarningLevel.Off;
+#else
         bEnableUndefinedIdentifierWarnings = false;
+#endif
+        
+#if UE_5_6_OR_LATER
+        CppCompileWarningSettings.ShadowVariableWarningLevel = WarningLevel.Off;
+#else
         ShadowVariableWarningLevel = WarningLevel.Off;
+#endif
 
         m_LuaVersion = GetLuaVersion();
         m_Config = GetConfigName();
@@ -425,9 +436,13 @@ public class Lua : ModuleRules
 
     private string GetConfigName()
     {
+        // 使用 Debug 版本要求用户运行平台中带有 vcruntime140d.dll，不太方便
+        // 绝大多数情况使用 Release 版本即可，只有在开发过程中临时需要再打开 Debug 版本
+        #if false
         if (Target.Configuration == UnrealTargetConfiguration.Debug
             || Target.Configuration == UnrealTargetConfiguration.DebugGame)
             return "Debug";
+        #endif
         return "Release";
     }
 
@@ -442,8 +457,10 @@ public class Lua : ModuleRules
                 return "Ninja";
             if (Target.Platform.IsInGroup(UnrealPlatformGroup.Windows))
             {
+#if !UE_5_4_OR_LATER
                 if (Target.WindowsPlatform.Compiler == WindowsCompiler.VisualStudio2019)
                     return "Visual Studio 16 2019";
+#endif
 #if UE_4_27_OR_LATER
                 if (Target.WindowsPlatform.Compiler == WindowsCompiler.VisualStudio2022)
                     return "Visual Studio 17 2022";
