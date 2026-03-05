@@ -117,7 +117,19 @@ namespace UnLua
                 TArray<IExportedFunction*> ExportedFunctions;
                 (*Exported)->GetFunctions(ExportedFunctions);
                 for (const auto Function : ExportedFunctions)
-                    Function->GenerateIntelliSense(Ret);
+                {
+                    const FString FuncName = Function->GetName();
+                    FString FuncBuffer;
+                    Function->GenerateIntelliSense(FuncBuffer);
+                    if (!FuncBuffer.IsEmpty())
+                    {
+                        Ret += FuncBuffer;
+                    }
+                    else if (!FuncName.IsEmpty() && !FuncName.StartsWith(TEXT("__")))
+                    {
+                        Ret += FString::Printf(TEXT("function %s:%s(...) end\r\n"), *EscapeSymbolName(TypeName), *FuncName);
+                    }
+                }
             }
             return Ret;
         }
@@ -180,7 +192,19 @@ namespace UnLua
                 TArray<IExportedFunction*> ExportedFunctions;
                 (*Exported)->GetFunctions(ExportedFunctions);
                 for (const auto Function : ExportedFunctions)
-                    Function->GenerateIntelliSense(Ret);
+                {
+                    const FString FuncName = Function->GetName();
+                    FString FuncBuffer;
+                    Function->GenerateIntelliSense(FuncBuffer);
+                    if (!FuncBuffer.IsEmpty())
+                    {
+                        Ret += FuncBuffer;
+                    }
+                    else if (!FuncName.IsEmpty() && !FuncName.StartsWith(TEXT("__")))
+                    {
+                        Ret += FString::Printf(TEXT("function %s:%s(...) end\r\n"), *EscapedClassName, *FuncName);
+                    }
+                }
             }
             return Ret;
         }
